@@ -1,0 +1,85 @@
+import pandas as pd
+import numpy as np
+import string
+import re
+import nltk
+import spacy
+from sklearn.model_selection import train_test_split
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+import joblib
+
+# Download essentials
+nltk.download('stopwords')
+from nltk.corpus import stopwords
+
+# Load spaCy model
+nlp = spacy.load("en_core_web_sm")
+
+STOPWORDS = set(stopwords.words('english'))
+
+# Cleaning & Preprocessing based on PDF NLP pipeline
+def clean_text(text):
+    text = text.lower()                              # lowercase
+    text = re.sub(r'https?://\S+|www\.\S+', '', text) # remove urls
+    text = re.sub(r'[^a-zA-Z\s]', '', text)           # alpha only
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
+
+def preprocess(text):
+    text = clean_text(text)
+    doc = nlp(text)
+
+    tokens = []
+    for token in doc:
+        if token.text not in STOPWORDS and token.is_alpha:
+            tokens.append(token.lemma_)  # lemmatization
+    return " ".join(tokens)
+
+# Load dataset
+df = pd.read_csv("data/news.csv")  # columns: text, label
+
+df['text'] = df['text'].apply(preprocess)
+
+X = df['text']
+y = df['label']
+
+tfidf = TfidfVectorizer(max_features=5000, ngram_range=(1,2))
+X = tfidf.fit_transform(X)
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+model = LogisticRegression(max_iter=300)
+model.fit(X_train, y_train)
+
+y_pred = model.predict(X_test)
+
+# Performance as per PDF
+print("Accuracy :", accuracy_score(y_test, y_pred))
+print("Precision:", precision_score(y_test, y_pred, pos_label='FAKE'))
+print("Recall   :", recall_score(y_test, y_pred, pos_label='FAKE'))
+print("F1 Score :", f1_score(y_test, y_pred, pos_label='FAKE'))
+
+# Save model
+joblib.dump(model, "models/model.pkl")
+joblib.dump(tfidf, "vectorizer/tfidf.pkl")
+
+print("\nModel training complete & saved!")
+
+# --- Prediction with explanation ---
+def truth_detector(input_text):
+    clean = preprocess(input_text)
+    vector = tfidf.transform([clean])
+    result = model.predict(vector)[0]
+    prob = model.predict_proba(vector).max()
+
+    explanation = f"Prediction Confidence: {prob:.4f}\n"
+    if result == "FAKE":
+        return f"[FAKE NEWS DETECTED]\n{explanation}"
+    else:
+        return f"[FACTUAL / REAL NEWS]\n{explanation}"
+
+# Test
+test_text = "Breaking news! Scientists find cure for aging!"
+print("\nTesting prediction:\n", truth_detector(test_text))
